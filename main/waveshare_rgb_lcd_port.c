@@ -5,6 +5,7 @@
  */
 
 #include "waveshare_rgb_lcd_port.h"
+#include <math.h>
 
 // VSYNC event callback function
 IRAM_ATTR static bool rgb_lcd_on_vsync_event(esp_lcd_panel_handle_t panel, const esp_lcd_rgb_panel_event_data_t *edata, void *user_ctx)
@@ -206,64 +207,206 @@ esp_err_t wavesahre_rgb_lcd_bl_off()
     return ESP_OK;
 }
 
-/******************************* Example code **************************************/
-static void draw_event_cb(lv_event_t *e) // Draw event callback function 
+/******************************* RAW data streaming demo **************************************/
+#define RAW_DATA_TIMER_PERIOD_SENSOR_MS 10
+#define RAW_DATA_TIMER_PERIOD_CHART_MS 100
+#define RAW_DATA_MAX_ABS_VALUE 2.0f
+#define RAW_DATA_CHART_POINT_COUNT 50
+#define RAW_DATA_CHART_SCALE 1000
+
+static const char *RAW_DATA_TIME_AXIS_LABELS = "0\n1\n2\n3\n4\n5";
+static const char *RAW_DATA_VALUE_AXIS_LABELS = "-2\n-1\n0\n1\n2";
+
+typedef struct
 {
-    lv_obj_draw_part_dsc_t *dsc = lv_event_get_draw_part_dsc(e); // Get the draw part descriptor 
-    if (dsc->part == LV_PART_ITEMS)
-    {                                                                 // If drawing chart items 
-        lv_obj_t *obj = lv_event_get_target(e);                       // Get the target object of the event 
-        lv_chart_series_t *ser = lv_chart_get_series_next(obj, NULL); // Get the series of the chart 
-        uint32_t cnt = lv_chart_get_point_count(obj);                 // Get the number of points in the chart 
-        /* Make older values more transparent */
-        dsc->rect_dsc->bg_opa = (LV_OPA_COVER * dsc->id) / (cnt - 1); // Set opacity based on the index 
+    float accel[3];
+    float gyro[3];
+} sensor_data_t;
 
-        /* Make smaller values blue, higher values red  */
-        lv_coord_t *x_array = lv_chart_get_x_array(obj, ser); // Get the X-axis array 
-        lv_coord_t *y_array = lv_chart_get_y_array(obj, ser); // Get the Y-axis array 
-        /* dsc->id is the drawing order, but we need the index of the point being drawn dsc->id  */
-        uint32_t start_point = lv_chart_get_x_start_point(obj, ser); // Get the start point of the chart 
-        uint32_t p_act = (start_point + dsc->id) % cnt;              // Calculate the actual index based on the start point 
-        lv_opa_t x_opa = (x_array[p_act] * LV_OPA_50) / 200;         // Calculate X-axis opacity 
-        lv_opa_t y_opa = (y_array[p_act] * LV_OPA_50) / 1000;        // Calculate Y-axis opacity 
+typedef struct
+{
+    lv_obj_t *chart;
+    lv_chart_series_t *accel_series[3];
+    lv_chart_series_t *gyro_series[3];
+    lv_obj_t *accel_labels[3];
+    lv_obj_t *gyro_labels[3];
+} raw_data_ui_ctx_t;
 
-        dsc->rect_dsc->bg_color = lv_color_mix(lv_palette_main(LV_PALETTE_RED), // Mix colors 
-                                               lv_palette_main(LV_PALETTE_BLUE),
-                                               x_opa + y_opa);
+static sensor_data_t s_sensor_data;
+static raw_data_ui_ctx_t s_raw_ui_ctx;
+static float s_emulation_time_s;
+
+static float clampf_range(float value, float min_value, float max_value)
+{
+    if (value < min_value)
+    {
+        return min_value;
     }
+    if (value > max_value)
+    {
+        return max_value;
+    }
+    return value;
 }
 
-static void add_data(lv_timer_t *timer) // Timer callback to add data to the chart 
+static lv_coord_t raw_to_chart_coord(float value)
 {
-    lv_obj_t *chart = timer->user_data;                                                                        // Get the chart associated with the timer 
-    lv_chart_set_next_value2(chart, lv_chart_get_series_next(chart, NULL), lv_rand(0, 200), lv_rand(0, 1000)); // Add random data to the chart 
+    return (lv_coord_t)(value * RAW_DATA_CHART_SCALE);
 }
 
-// This demo UI is adapted from LVGL official example: https://docs.lvgl.io/master/examples.html#scatter-chart
-void example_lvgl_demo_ui() // LVGL demo UI initialization function 
+static float noise_component(float magnitude)
 {
-    lv_obj_t *scr = lv_scr_act();                                              // Get the current active screen 
-    lv_obj_t *chart = lv_chart_create(scr);                                    // Create a chart object 
-    lv_obj_set_size(chart, 200, 150);                                          // Set chart size 
-    lv_obj_align(chart, LV_ALIGN_CENTER, 0, 0);                                // Center the chart on the screen 
-    lv_obj_add_event_cb(chart, draw_event_cb, LV_EVENT_DRAW_PART_BEGIN, NULL); // Add draw event callback 
-    lv_obj_set_style_line_width(chart, 0, LV_PART_ITEMS);                      /* Remove chart lines  */
+    return ((float)lv_rand(-100, 100) / 1000.0f) * magnitude;
+}
 
-    lv_chart_set_type(chart, LV_CHART_TYPE_SCATTER); // Set chart type to scatter 
+static void emulate_sensor_task(lv_timer_t *timer)
+{
+    (void)timer;
+    s_emulation_time_s += RAW_DATA_TIMER_PERIOD_SENSOR_MS / 1000.0f;
 
-    lv_chart_set_axis_tick(chart, LV_CHART_AXIS_PRIMARY_X, 5, 5, 5, 1, true, 30);  // Set X-axis ticks 
-    lv_chart_set_axis_tick(chart, LV_CHART_AXIS_PRIMARY_Y, 10, 5, 6, 5, true, 50); // Set Y-axis ticks 
+    const float two_pi = 6.28318530718f;
 
-    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_X, 0, 200);  // Set X-axis range 
-    lv_chart_set_range(chart, LV_CHART_AXIS_PRIMARY_Y, 0, 1000); // Set Y-axis range 
+    s_sensor_data.accel[0] = clampf_range(1.2f * sinf(two_pi * 0.35f * s_emulation_time_s) + noise_component(0.05f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
+    s_sensor_data.accel[1] = clampf_range(1.0f * sinf(two_pi * 0.22f * s_emulation_time_s + 0.8f) + noise_component(0.05f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
+    s_sensor_data.accel[2] = clampf_range(0.9f * sinf(two_pi * 0.28f * s_emulation_time_s + 1.6f) + noise_component(0.05f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
 
-    lv_chart_set_point_count(chart, 50); // Set the number of points in the chart 
+    s_sensor_data.gyro[0] = clampf_range(1.4f * sinf(two_pi * 0.18f * s_emulation_time_s + 0.3f) + noise_component(0.06f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
+    s_sensor_data.gyro[1] = clampf_range(1.1f * sinf(two_pi * 0.30f * s_emulation_time_s + 1.1f) + noise_component(0.06f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
+    s_sensor_data.gyro[2] = clampf_range(1.0f * sinf(two_pi * 0.24f * s_emulation_time_s + 2.0f) + noise_component(0.06f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
+}
 
-    lv_chart_series_t *ser = lv_chart_add_series(chart, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y); // Add a series to the chart 
-    for (int i = 0; i < 50; i++)
-    {                                                                            // Add random points to the chart 
-        lv_chart_set_next_value2(chart, ser, lv_rand(0, 200), lv_rand(0, 1000)); // Set X and Y values 
+static void update_chart_and_labels(lv_timer_t *timer)
+{
+    raw_data_ui_ctx_t *ctx = timer->user_data;
+    if (ctx == NULL || ctx->chart == NULL)
+    {
+        return;
     }
 
-    lv_timer_create(add_data, 100, chart); // Create a timer to add new data every 100ms 
+    for (int i = 0; i < 3; i++)
+    {
+        lv_chart_set_next_value(ctx->chart, ctx->accel_series[i], raw_to_chart_coord(s_sensor_data.accel[i]));
+        lv_chart_set_next_value(ctx->chart, ctx->gyro_series[i], raw_to_chart_coord(s_sensor_data.gyro[i]));
+    }
+
+    lv_label_set_text_fmt(ctx->accel_labels[0], "Acc x: %.2f", s_sensor_data.accel[0]);
+    lv_label_set_text_fmt(ctx->accel_labels[1], "Acc y: %.2f", s_sensor_data.accel[1]);
+    lv_label_set_text_fmt(ctx->accel_labels[2], "Acc z: %.2f", s_sensor_data.accel[2]);
+
+    lv_label_set_text_fmt(ctx->gyro_labels[0], "Gyro roll: %.2f", s_sensor_data.gyro[0]);
+    lv_label_set_text_fmt(ctx->gyro_labels[1], "Gyro Pitch: %.2f", s_sensor_data.gyro[1]);
+    lv_label_set_text_fmt(ctx->gyro_labels[2], "Gyro yaw: %.2f", s_sensor_data.gyro[2]);
+}
+
+void raw_data_demo_ui(void)
+{
+    lv_memset_00(&s_sensor_data, sizeof(s_sensor_data));
+    lv_memset_00(&s_raw_ui_ctx, sizeof(s_raw_ui_ctx));
+    s_emulation_time_s = 0.0f;
+
+    lv_obj_t *scr = lv_scr_act();
+
+    lv_obj_t *status_panel = lv_obj_create(scr);
+    lv_obj_set_size(status_panel, 300, 300);
+    lv_obj_align(status_panel, LV_ALIGN_LEFT_MID, 20, 0);
+    lv_obj_set_style_bg_color(status_panel, lv_palette_main(LV_PALETTE_RED), 0);
+    lv_obj_set_style_bg_opa(status_panel, LV_OPA_COVER, 0);
+    lv_obj_set_style_radius(status_panel, 20, 0);
+    lv_obj_set_style_border_width(status_panel, 0, 0);
+    lv_obj_set_style_pad_all(status_panel, 0, 0);
+
+    lv_obj_t *warning_label = lv_label_create(scr);
+    lv_label_set_text(warning_label, "Wrong move");
+    lv_obj_align_to(warning_label, status_panel, LV_ALIGN_OUT_TOP_MID, 0, -10);
+
+    lv_obj_t *raw_values_container = lv_obj_create(scr);
+    lv_obj_remove_style_all(raw_values_container);
+    lv_obj_set_size(raw_values_container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_align(raw_values_container, LV_ALIGN_TOP_RIGHT, -20, 20);
+    lv_obj_set_style_pad_all(raw_values_container, 0, 0);
+    lv_obj_set_style_pad_row(raw_values_container, 0, 0);
+    lv_obj_set_style_pad_column(raw_values_container, 24, 0);
+    lv_obj_set_layout(raw_values_container, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(raw_values_container, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(raw_values_container, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_START);
+
+    lv_obj_t *accel_container = lv_obj_create(raw_values_container);
+    lv_obj_remove_style_all(accel_container);
+    lv_obj_set_size(accel_container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_layout(accel_container, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(accel_container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(accel_container, 6, 0);
+
+    const lv_color_t accel_colors[3] = {
+        lv_palette_main(LV_PALETTE_RED),
+        lv_palette_main(LV_PALETTE_BLUE),
+        lv_palette_main(LV_PALETTE_GREEN),
+    };
+    const char *accel_axis_labels[3] = {"Acc x", "Acc y", "Acc z"};
+    for (int i = 0; i < 3; i++)
+    {
+        s_raw_ui_ctx.accel_labels[i] = lv_label_create(accel_container);
+        lv_label_set_text_fmt(s_raw_ui_ctx.accel_labels[i], "%s: %.2f", accel_axis_labels[i], 0.0f);
+        lv_obj_set_style_text_color(s_raw_ui_ctx.accel_labels[i], accel_colors[i], 0);
+    }
+
+    lv_obj_t *gyro_container = lv_obj_create(raw_values_container);
+    lv_obj_remove_style_all(gyro_container);
+    lv_obj_set_size(gyro_container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_set_layout(gyro_container, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(gyro_container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(gyro_container, 6, 0);
+
+    const lv_color_t gyro_colors[3] = {
+        lv_palette_main(LV_PALETTE_ORANGE),
+        lv_palette_main(LV_PALETTE_PURPLE),
+        lv_palette_main(LV_PALETTE_TEAL),
+    };
+    const char *gyro_axis_labels[3] = {"Gyro roll", "Gyro Pitch", "Gyro yaw"};
+    for (int i = 0; i < 3; i++)
+    {
+        s_raw_ui_ctx.gyro_labels[i] = lv_label_create(gyro_container);
+        lv_label_set_text_fmt(s_raw_ui_ctx.gyro_labels[i], "%s: %.2f", gyro_axis_labels[i], 0.0f);
+        lv_obj_set_style_text_color(s_raw_ui_ctx.gyro_labels[i], gyro_colors[i], 0);
+    }
+
+    s_raw_ui_ctx.chart = lv_chart_create(scr);
+    lv_obj_set_size(s_raw_ui_ctx.chart, 400, 300);
+    lv_obj_align(s_raw_ui_ctx.chart, LV_ALIGN_BOTTOM_RIGHT, -20, -20);
+    lv_chart_set_type(s_raw_ui_ctx.chart, LV_CHART_TYPE_LINE);
+    lv_chart_set_point_count(s_raw_ui_ctx.chart, RAW_DATA_CHART_POINT_COUNT);
+    lv_chart_set_update_mode(s_raw_ui_ctx.chart, LV_CHART_UPDATE_MODE_SHIFT);
+    lv_chart_set_range(s_raw_ui_ctx.chart, LV_CHART_AXIS_PRIMARY_X, 0, 5);
+    lv_chart_set_range(s_raw_ui_ctx.chart, LV_CHART_AXIS_PRIMARY_Y, (lv_coord_t)(-RAW_DATA_CHART_SCALE * RAW_DATA_MAX_ABS_VALUE), (lv_coord_t)(RAW_DATA_CHART_SCALE * RAW_DATA_MAX_ABS_VALUE));
+    lv_chart_set_axis_tick(s_raw_ui_ctx.chart, LV_CHART_AXIS_PRIMARY_X, 10, 5, 6, 0, true, 40);
+    lv_chart_set_axis_tick_texts(s_raw_ui_ctx.chart, LV_CHART_AXIS_PRIMARY_X, RAW_DATA_TIME_AXIS_LABELS, 6, LV_CHART_AXIS_DRAW_LAST_TICK);
+    lv_chart_set_axis_tick(s_raw_ui_ctx.chart, LV_CHART_AXIS_PRIMARY_Y, 10, 5, 5, 0, true, 50);
+    lv_chart_set_axis_tick_texts(s_raw_ui_ctx.chart, LV_CHART_AXIS_PRIMARY_Y, RAW_DATA_VALUE_AXIS_LABELS, 5, LV_CHART_AXIS_DRAW_LAST_TICK);
+    lv_chart_set_div_line_count(s_raw_ui_ctx.chart, 5, 5);
+
+    lv_obj_set_style_bg_opa(s_raw_ui_ctx.chart, LV_OPA_30, 0);
+    lv_obj_set_style_pad_all(s_raw_ui_ctx.chart, 8, 0);
+    lv_obj_set_style_line_width(s_raw_ui_ctx.chart, 2, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    lv_obj_set_style_size(s_raw_ui_ctx.chart, 4, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+
+    lv_obj_t *chart_title = lv_label_create(scr);
+    lv_label_set_text(chart_title, "RAW DATA");
+    lv_obj_align_to(chart_title, s_raw_ui_ctx.chart, LV_ALIGN_OUT_TOP_MID, 0, -10);
+
+    s_raw_ui_ctx.accel_series[0] = lv_chart_add_series(s_raw_ui_ctx.chart, lv_palette_main(LV_PALETTE_RED), LV_CHART_AXIS_PRIMARY_Y);
+    s_raw_ui_ctx.accel_series[1] = lv_chart_add_series(s_raw_ui_ctx.chart, lv_palette_main(LV_PALETTE_BLUE), LV_CHART_AXIS_PRIMARY_Y);
+    s_raw_ui_ctx.accel_series[2] = lv_chart_add_series(s_raw_ui_ctx.chart, lv_palette_main(LV_PALETTE_GREEN), LV_CHART_AXIS_PRIMARY_Y);
+
+    s_raw_ui_ctx.gyro_series[0] = lv_chart_add_series(s_raw_ui_ctx.chart, lv_palette_main(LV_PALETTE_ORANGE), LV_CHART_AXIS_PRIMARY_Y);
+    s_raw_ui_ctx.gyro_series[1] = lv_chart_add_series(s_raw_ui_ctx.chart, lv_palette_main(LV_PALETTE_PURPLE), LV_CHART_AXIS_PRIMARY_Y);
+    s_raw_ui_ctx.gyro_series[2] = lv_chart_add_series(s_raw_ui_ctx.chart, lv_palette_main(LV_PALETTE_TEAL), LV_CHART_AXIS_PRIMARY_Y);
+
+    for (int i = 0; i < 3; i++)
+    {
+        lv_chart_set_all_value(s_raw_ui_ctx.chart, s_raw_ui_ctx.accel_series[i], 0);
+        lv_chart_set_all_value(s_raw_ui_ctx.chart, s_raw_ui_ctx.gyro_series[i], 0);
+    }
+
+    lv_timer_create(emulate_sensor_task, RAW_DATA_TIMER_PERIOD_SENSOR_MS, NULL);
+    lv_timer_create(update_chart_and_labels, RAW_DATA_TIMER_PERIOD_CHART_MS, &s_raw_ui_ctx);
 }
