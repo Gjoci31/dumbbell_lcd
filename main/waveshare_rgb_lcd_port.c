@@ -257,12 +257,55 @@ static float noise_component(float magnitude)
 
 static void emulate_sensor_task(lv_timer_t *timer)
 {
+{
+    lv_obj_t *chart;
+    lv_chart_series_t *accel_series[3];
+    lv_chart_series_t *gyro_series[3];
+    lv_obj_t *accel_labels[3];
+    lv_obj_t *gyro_labels[3];
+} raw_data_ui_ctx_t;
+
+static sensor_data_t s_sensor_data;
+static raw_data_ui_ctx_t s_raw_ui_ctx;
+
+static inline float clampf_range(float value, float min_value, float max_value)
+{
+    if (value < min_value)
+    {
+        return min_value;
+    }
+    if (value > max_value)
+    {
+        return max_value;
+    }
+    return value;
+}
+
+static inline lv_coord_t raw_to_chart_coord(float value)
+{
+    return (lv_coord_t)(value * RAW_DATA_CHART_SCALE);
+}
+
+static float noise_component(float magnitude)
+{
+    return ((float)lv_rand(-100, 100) / 1000.0f) * magnitude;
+}
+
+static void emulate_sensor_task(lv_timer_t *timer)
+{
     (void)timer;
     static float time_s = 0.0f;
     time_s += RAW_DATA_TIMER_PERIOD_SENSOR_MS / 1000.0f;
 
     const float two_pi = 6.28318530718f;
 
+    s_sensor_data.accel[0] = clampf_range(1.2f * sinf(two_pi * 0.35f * time_s) + noise_component(0.05f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
+    s_sensor_data.accel[1] = clampf_range(1.0f * sinf(two_pi * 0.22f * time_s + 0.8f) + noise_component(0.05f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
+    s_sensor_data.accel[2] = clampf_range(0.9f * sinf(two_pi * 0.28f * time_s + 1.6f) + noise_component(0.05f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
+
+    s_sensor_data.gyro[0] = clampf_range(1.4f * sinf(two_pi * 0.18f * time_s + 0.3f) + noise_component(0.06f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
+    s_sensor_data.gyro[1] = clampf_range(1.1f * sinf(two_pi * 0.30f * time_s + 1.1f) + noise_component(0.06f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
+    s_sensor_data.gyro[2] = clampf_range(1.0f * sinf(two_pi * 0.24f * time_s + 2.0f) + noise_component(0.06f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
     s_sensor_data.accel[0] = clampf_range(1.0f * sinf(two_pi * 0.35f * time_s) + 0.3f * cosf(two_pi * 0.15f * time_s) + noise_component(0.08f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
     s_sensor_data.accel[1] = clampf_range(0.8f * sinf(two_pi * 0.25f * time_s + 0.5f) + noise_component(0.1f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
     s_sensor_data.accel[2] = clampf_range(0.6f * cosf(two_pi * 0.18f * time_s - 0.2f) + 0.4f * sinf(two_pi * 0.05f * time_s) + noise_component(0.05f), -RAW_DATA_MAX_ABS_VALUE, RAW_DATA_MAX_ABS_VALUE);
@@ -286,6 +329,13 @@ static void update_chart_and_labels(lv_timer_t *timer)
         lv_chart_set_next_value(ctx->chart, ctx->gyro_series[i], raw_to_chart_coord(s_sensor_data.gyro[i]));
     }
 
+    lv_label_set_text_fmt(ctx->accel_labels[0], "Acc x: %.2f", s_sensor_data.accel[0]);
+    lv_label_set_text_fmt(ctx->accel_labels[1], "Acc y: %.2f", s_sensor_data.accel[1]);
+    lv_label_set_text_fmt(ctx->accel_labels[2], "Acc z: %.2f", s_sensor_data.accel[2]);
+
+    lv_label_set_text_fmt(ctx->gyro_labels[0], "Gyro roll: %.2f", s_sensor_data.gyro[0]);
+    lv_label_set_text_fmt(ctx->gyro_labels[1], "Gyro Pitch: %.2f", s_sensor_data.gyro[1]);
+    lv_label_set_text_fmt(ctx->gyro_labels[2], "Gyro yaw: %.2f", s_sensor_data.gyro[2]);
     lv_label_set_text_fmt(ctx->accel_labels[0], "Gyorsulásmérő X: %.2f", s_sensor_data.accel[0]);
     lv_label_set_text_fmt(ctx->accel_labels[1], "Gyorsulásmérő Y: %.2f", s_sensor_data.accel[1]);
     lv_label_set_text_fmt(ctx->accel_labels[2], "Gyorsulásmérő Z: %.2f", s_sensor_data.accel[2]);
@@ -312,11 +362,19 @@ void raw_data_demo_ui(void)
     lv_obj_set_style_pad_all(status_panel, 0, 0);
 
     lv_obj_t *warning_label = lv_label_create(scr);
+    lv_label_set_text(warning_label, "Wrong move");
     lv_label_set_text(warning_label, "Rossz végrehajtás");
     lv_obj_align_to(warning_label, status_panel, LV_ALIGN_OUT_TOP_MID, 0, -10);
 
     lv_obj_t *raw_values_container = lv_obj_create(scr);
     lv_obj_remove_style_all(raw_values_container);
+    lv_obj_set_size(raw_values_container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_align(raw_values_container, LV_ALIGN_TOP_RIGHT, -20, 20);
+    lv_obj_set_style_pad_all(raw_values_container, 0, 0);
+    lv_obj_set_style_pad_row(raw_values_container, 0, 0);
+    lv_obj_set_style_pad_column(raw_values_container, 24, 0);
+    lv_obj_set_layout(raw_values_container, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(raw_values_container, LV_FLEX_FLOW_ROW);
     lv_obj_set_size(raw_values_container, 400, LV_SIZE_CONTENT);
     lv_obj_align(raw_values_container, LV_ALIGN_TOP_RIGHT, -20, 20);
     lv_obj_set_style_pad_all(raw_values_container, 0, 0);
@@ -330,6 +388,19 @@ void raw_data_demo_ui(void)
     lv_obj_set_size(accel_container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_layout(accel_container, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(accel_container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(accel_container, 6, 0);
+
+    const lv_color_t accel_colors[3] = {
+        lv_palette_main(LV_PALETTE_RED),
+        lv_palette_main(LV_PALETTE_BLUE),
+        lv_palette_main(LV_PALETTE_GREEN),
+    };
+    const char *accel_axis_labels[3] = {"Acc x", "Acc y", "Acc z"};
+    for (int i = 0; i < 3; i++)
+    {
+        s_raw_ui_ctx.accel_labels[i] = lv_label_create(accel_container);
+        lv_label_set_text_fmt(s_raw_ui_ctx.accel_labels[i], "%s: %.2f", accel_axis_labels[i], 0.0f);
+        lv_obj_set_style_text_color(s_raw_ui_ctx.accel_labels[i], accel_colors[i], 0);
     lv_obj_set_style_pad_row(accel_container, 4, 0);
 
     lv_obj_t *accel_title = lv_label_create(accel_container);
@@ -346,6 +417,19 @@ void raw_data_demo_ui(void)
     lv_obj_set_size(gyro_container, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
     lv_obj_set_layout(gyro_container, LV_LAYOUT_FLEX);
     lv_obj_set_flex_flow(gyro_container, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(gyro_container, 6, 0);
+
+    const lv_color_t gyro_colors[3] = {
+        lv_palette_main(LV_PALETTE_ORANGE),
+        lv_palette_main(LV_PALETTE_PURPLE),
+        lv_palette_main(LV_PALETTE_TEAL),
+    };
+    const char *gyro_axis_labels[3] = {"Gyro roll", "Gyro Pitch", "Gyro yaw"};
+    for (int i = 0; i < 3; i++)
+    {
+        s_raw_ui_ctx.gyro_labels[i] = lv_label_create(gyro_container);
+        lv_label_set_text_fmt(s_raw_ui_ctx.gyro_labels[i], "%s: %.2f", gyro_axis_labels[i], 0.0f);
+        lv_obj_set_style_text_color(s_raw_ui_ctx.gyro_labels[i], gyro_colors[i], 0);
     lv_obj_set_style_pad_row(gyro_container, 4, 0);
 
     lv_obj_t *gyro_title = lv_label_create(gyro_container);
@@ -371,6 +455,8 @@ void raw_data_demo_ui(void)
 
     lv_obj_set_style_bg_opa(s_raw_ui_ctx.chart, LV_OPA_30, 0);
     lv_obj_set_style_pad_all(s_raw_ui_ctx.chart, 8, 0);
+    lv_obj_set_style_line_width(s_raw_ui_ctx.chart, 2, LV_PART_INDICATOR | LV_STATE_DEFAULT);
+    lv_obj_set_style_size(s_raw_ui_ctx.chart, 4, LV_PART_INDICATOR | LV_STATE_DEFAULT);
 
     lv_obj_t *chart_title = lv_label_create(scr);
     lv_label_set_text(chart_title, "RAW DATA");
