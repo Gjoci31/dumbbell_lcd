@@ -323,14 +323,13 @@ void raw_data_demo_ui(void)
     lv_obj_align_to(button_grid, status_panel, LV_ALIGN_OUT_BOTTOM_MID, 0, 20);
 
     static const char *button_labels[] = {"Record", "Play", "Settings", "File", "Save", "Load"};
-    static const lv_color_t button_colors[] = {
-        lv_palette_lighten(LV_PALETTE_BLUE, 2),
-        lv_palette_lighten(LV_PALETTE_BLUE, 2),
-        lv_palette_main(LV_PALETTE_GREY),
-        lv_palette_main(LV_PALETTE_GREY),
-        lv_palette_lighten(LV_PALETTE_YELLOW, 2),
-        lv_palette_lighten(LV_PALETTE_YELLOW, 2),
-    };
+    lv_color_t button_colors[6];
+    button_colors[0] = lv_palette_lighten(LV_PALETTE_BLUE, 2);
+    button_colors[1] = lv_palette_lighten(LV_PALETTE_BLUE, 2);
+    button_colors[2] = lv_palette_main(LV_PALETTE_GREY);
+    button_colors[3] = lv_palette_main(LV_PALETTE_GREY);
+    button_colors[4] = lv_palette_lighten(LV_PALETTE_YELLOW, 2);
+    button_colors[5] = lv_palette_lighten(LV_PALETTE_YELLOW, 2);
 
     for (int i = 0; i < 6; i++)
     {
