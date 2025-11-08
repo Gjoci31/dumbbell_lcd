@@ -296,10 +296,12 @@ void raw_data_demo_ui(void)
     lv_memset_00(&s_raw_ui_ctx, sizeof(s_raw_ui_ctx));
 
     lv_obj_t *scr = lv_scr_act();
+    lv_obj_set_style_bg_color(scr, lv_color_hex(0xDFF7DF), 0);
+    lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
     lv_obj_t *status_panel = lv_obj_create(scr);
-    lv_obj_set_size(status_panel, 300, 300);
-    lv_obj_align(status_panel, LV_ALIGN_LEFT_MID, 20, 0);
+    lv_obj_set_size(status_panel, 300, 100);
+    lv_obj_align(status_panel, LV_ALIGN_TOP_LEFT, 20, 20);
     lv_obj_set_style_bg_color(status_panel, lv_palette_main(LV_PALETTE_RED), 0);
     lv_obj_set_style_bg_opa(status_panel, LV_OPA_COVER, 0);
     lv_obj_set_style_radius(status_panel, 20, 0);
@@ -309,6 +311,42 @@ void raw_data_demo_ui(void)
     lv_obj_t *warning_label = lv_label_create(scr);
     lv_label_set_text(warning_label, "wrong move");
     lv_obj_align_to(warning_label, status_panel, LV_ALIGN_OUT_TOP_MID, 0, -10);
+
+    lv_obj_t *button_grid = lv_obj_create(scr);
+    lv_obj_remove_style_all(button_grid);
+    lv_obj_set_width(button_grid, 300);
+    lv_obj_set_style_pad_all(button_grid, 0, 0);
+    lv_obj_set_style_pad_row(button_grid, 12, 0);
+    lv_obj_set_style_pad_column(button_grid, 12, 0);
+    lv_obj_set_layout(button_grid, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(button_grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_align_to(button_grid, status_panel, LV_ALIGN_OUT_BOTTOM_MID, 0, 20);
+
+    static const char *button_labels[] = {"Record", "Play", "Settings", "File", "Save", "Load"};
+    static const lv_color_t button_colors[] = {
+        lv_palette_lighten(LV_PALETTE_BLUE, 2),
+        lv_palette_lighten(LV_PALETTE_BLUE, 2),
+        lv_palette_main(LV_PALETTE_GREY),
+        lv_palette_main(LV_PALETTE_GREY),
+        lv_palette_lighten(LV_PALETTE_YELLOW, 2),
+        lv_palette_lighten(LV_PALETTE_YELLOW, 2),
+    };
+
+    for (int i = 0; i < 6; i++)
+    {
+        lv_obj_t *btn = lv_btn_create(button_grid);
+        lv_obj_set_size(btn, 140, 48);
+        lv_obj_set_style_bg_color(btn, button_colors[i], LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_radius(btn, 12, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_width(btn, 2, LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_border_color(btn, lv_color_hex(0x404040), LV_PART_MAIN | LV_STATE_DEFAULT);
+        lv_obj_set_style_pad_all(btn, 10, LV_PART_MAIN | LV_STATE_DEFAULT);
+
+        lv_obj_t *label = lv_label_create(btn);
+        lv_label_set_text(label, button_labels[i]);
+        lv_obj_center(label);
+    }
 
     lv_obj_t *raw_values_container = lv_obj_create(scr);
     lv_obj_remove_style_all(raw_values_container);
